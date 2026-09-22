@@ -1,0 +1,14 @@
+{
+  "name": "Something Strange",
+  "consumable": "Tuning fork",
+  "price": "1000000000000000000",
+  "outcomes": [
+    { "name": "A door that opens onto itself", "chanceBps": 3000, "reward": "250000000000000000" },
+    { "name": "A second shadow", "chanceBps": 2500, "reward": "400000000000000000" },
+    { "name": "A clock that counts sideways", "chanceBps": 1800, "reward": "750000000000000000" },
+    { "name": "A room that remembers you", "chanceBps": 1200, "reward": "1000000000000000000" },
+    { "name": "A Friend-shaped hole", "chanceBps": 800, "reward": "1750000000000000000" },
+    { "name": "Static that knows your name", "chanceBps": 500, "reward": "3000000000000000000" },
+    { "name": "The other Friend", "chanceBps": 200, "reward": "6000000000000000000" }
+  ]
+}

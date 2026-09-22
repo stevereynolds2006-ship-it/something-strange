@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Something Strange — demo</title>
+  <style>
+    :root { --lime:#ccff00; --ink:#050605; --dim:#9bb36a; --panel:#0b1006; --line:#2d3a14; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; height:100%; background:var(--ink); color:#d7ff9a;
+      font:13px/1.45 ui-monospace,Menlo,"IBM Plex Mono",monospace; }
+    body { display:flex; flex-direction:column; align-items:center; }
+    .frame { width:min(960px,100%); height:100%; max-height:100dvh; position:relative; overflow:hidden; background:#050605; }
+    canvas { display:block; width:100%; height:100%; touch-action:none; }
+    .hud { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:6px; align-items:center; z-index:3; flex-wrap:wrap; }
+    .chip, button { border:1px solid var(--lime); background:#10140a; color:var(--lime); font:inherit; padding:8px 10px; }
+    .chip { margin-right:auto; }
+    button { cursor:pointer; }
+    button:disabled { opacity:.4; }
+    button.primary { background:var(--lime); color:var(--ink); font-weight:700; }
+    .hint { position:absolute; left:10px; right:10px; bottom:12px; z-index:3; text-align:center;
+      background:rgba(5,6,5,.9); border:1px solid var(--line); color:var(--dim); padding:8px; font-size:11px; }
+    .modal { position:absolute; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:flex-end; justify-content:center; z-index:5; }
+    .sheet { width:min(520px,100%); max-height:86%; overflow:auto; background:var(--panel); border:1px solid var(--lime); padding:16px; }
+    .sheet h2 { margin:0 0 10px; color:var(--lime); font-size:16px; }
+    table { width:100%; border-collapse:collapse; margin:10px 0; }
+    th,td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); font-size:12px; }
+    .note { border:1px dashed var(--lime); padding:10px; margin:10px 0; }
+    .row { display:flex; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .reward { text-align:center; }
+    .glyph { font-size:42px; color:var(--lime); }
+    .banner { position:absolute; top:52px; left:10px; right:10px; z-index:3; font-size:11px; color:#7d8f4a; }
+    @media (min-width:700px) { .modal { align-items:center; } }
+  </style>
+</head>
+<body>
+  <div class="frame" id="frame">
+    <canvas id="world"></canvas>
+    <div class="hud">
+      <span class="chip" id="status">Demo · 20.00 RF · 0 forks</span>
+      <button type="button" id="btnCabinet">Cabinet</button>
+      <button type="button" id="btnNotes">Notes</button>
+    </div>
+    <div class="banner">Instant demo — simulated RF, no wallet. Official FriendSDK play still needs your Rare Friend.</div>
+    <p class="hint">Tap the map to walk · tap Listening post or the dish</p>
+    <div class="modal" id="modal" hidden></div>
+  </div>
+<script>
+const OUTCOMES = [
+  { name:"A door that opens onto itself", chanceBps:3000, reward:0.25, glyph:"⌬", note:"You turn the handle. The room you just left is waiting on the other side, already looking at you." },
+  { name:"A second shadow", chanceBps:2500, reward:0.40, glyph:"⌖", note:"It stands a half-step behind your Friend. It does not copy the walk. It copies the pause." },
+  { name:"A clock that counts sideways", chanceBps:1800, reward:0.75, glyph:"◌", note:"The hands agree on a time that is not a time. Nearby dishes click once, then forget." },
+  { name:"A room that remembers you", chanceBps:1200, reward:1.00, glyph:"▣", note:"The walls keep a version of your Friend from before you arrived. It is almost polite." },
+  { name:"A Friend-shaped hole", chanceBps:800, reward:1.75, glyph:"◎", note:"The air has a missing silhouette. When your Friend stands in it, the fit is too exact." },
+  { name:"Static that knows your name", chanceBps:500, reward:3.00, glyph:"◍", note:"White noise says the token number like a nickname. Then it waits to be answered." },
+  { name:"The other Friend", chanceBps:200, reward:6.00, glyph:"◉", note:"Same face. Wrong generation of the moment. It smiles with the delay of a recording." },
+];
+const STATIONS = [
+  { id:"buy", label:"Listening post", x:0.28, y:0.34 },
+  { id:"tune", label:"Strike a fork", x:0.68, y:0.58 },
+];
+const state = { x:0.5, y:0.52, tx:0.5, ty:0.52, rf:20, forks:0, inv:OUTCOMES.map(()=>0), notes:[], menu:null, result:null, walking:false };
+const canvas = document.getElementById("world");
+const ctx = canvas.getContext("2d");
+const modal = document.getElementById("modal");
+function money(n){ return n.toFixed(2) + " RF"; }
+function refreshHud(){ document.getElementById("status").textContent = `Demo · ${money(state.rf)} · ${state.forks} forks`; }
+function closeMenu(){ state.menu=null; modal.hidden=true; modal.innerHTML=""; }
+function openMenu(html){
+  modal.hidden=false;
+  modal.innerHTML = `<div class="sheet">${html}</div>`;
+  modal.querySelectorAll("[data-act]").forEach(btn => btn.addEventListener("click", () => act(btn.dataset.act, btn.dataset.i)));
+}
+function roll(){
+  let r = Math.floor(Math.random()*10000), acc=0;
+  for (let i=0;i<OUTCOMES.length;i++){ acc += OUTCOMES[i].chanceBps; if (r < acc) return i; }
+  return OUTCOMES.length-1;
+}
+function act(name, rawI){
+  const i = rawI==null ? null : Number(rawI);
+  if (name==="close") return closeMenu();
+  if (name==="buy"){
+    if (state.rf < 1) return openBuy("Not enough simulated RF.");
+    state.rf -= 1; state.forks += 1; refreshHud();
+    return openBuy("A simulated fork is now in your Friend's hand.");
+  }
+  if (name==="tune"){
+    if (state.forks < 1) return openTune();
+    state.forks -= 1;
+    const idx = roll();
+    state.inv[idx] += 1; state.result = idx;
+    state.notes.unshift(OUTCOMES[idx].name); state.notes = state.notes.slice(0,8);
+    refreshHud(); return openReward();
+  }
+  if (name==="keep") return closeMenu();
+  if (name==="redeem" && i!=null && state.inv[i]>0){
+    state.inv[i] -= 1; state.rf += OUTCOMES[i].reward; refreshHud(); return openCabinet();
+  }
+}
+function openBuy(msg=""){
+  state.menu="buy";
+  openMenu(`<h2>Listening post</h2><p>The dishes are already listening. A tuning fork costs 1.00 RF and produces exactly one answer.</p><table><thead><tr><th>What answers</th><th>Chance</th><th>Value</th></tr></thead><tbody>${OUTCOMES.map(o=>`<tr><td>${o.name}</td><td>${o.chanceBps/100}%</td><td>${money(o.reward)}</td></tr>`).join("")}</tbody></table><div class="actions"><button class="primary" data-act="buy">Buy one fork · 1 RF</button><button data-act="close">Walk away</button></div><p>${msg || "Simulated RF. The signal is not."}</p>`);
+}
+function openTune(){
+  state.menu="tune";
+  openMenu(`<h2>The answering dish</h2><p>${state.forks} forks ready. Strike one. The outpost will answer with something that should not exist.</p><div class="actions"><button class="primary" data-act="tune" ${state.forks?"":"disabled"}>Strike one fork</button><button data-act="close">Walk away</button></div>`);
+}
+function openReward(){
+  const o = OUTCOMES[state.result]; state.menu="reward";
+  openMenu(`<div class="reward"><div class="glyph">${o.glyph}</div><h2>${o.name}</h2><p>${money(o.reward)} · ${o.chanceBps/100}% chance</p><p class="note">${o.note}</p><p>This simulated object is already in your cabinet.</p><div class="actions"><button data-act="keep">Keep it</button><button class="primary" data-act="redeem" data-i="${state.result}">Redeem · ${money(o.reward)}</button></div></div>`);
+}
+function openCabinet(){
+  state.menu="inventory";
+  openMenu(`<h2>Strange cabinet</h2>${OUTCOMES.map((o,i)=>`<div class="row"><span><strong>${o.name}</strong><br><small>${state.inv[i]} owned · ${money(o.reward)}</small></span><button data-act="redeem" data-i="${i}" ${state.inv[i]?"":"disabled"}>Redeem one</button></div>`).join("")}<div class="actions"><button data-act="close">Close</button></div>`);
+}
+function openNotes(){
+  state.menu="notes";
+  openMenu(`<h2>Field notes</h2><p>Session notes only. Reloading forgets the handwriting.</p>${state.notes.length? `<ul>${state.notes.map(n=>`<li>${n}</li>`).join("")}</ul>` : "<p>Nothing has answered yet.</p>"}<div class="actions"><button data-act="close">Close</button></div>`);
+}
+document.getElementById("btnCabinet").onclick = () => openCabinet();
+document.getElementById("btnNotes").onclick = () => openNotes();
+function resize(){
+  const r = canvas.parentElement.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio||1);
+  canvas.width = r.width*dpr; canvas.height = r.height*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function hex(x,y,s, fill){
+  ctx.beginPath();
+  for(let i=0;i<6;i++){ const a=Math.PI/6+i*Math.PI/3; const px=x+Math.cos(a)*s, py=y+Math.sin(a)*s*0.58; i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+  ctx.closePath(); ctx.fillStyle=fill; ctx.fill(); ctx.strokeStyle="#ccff00"; ctx.lineWidth=1; ctx.stroke();
+}
+function draw(){
+  const w=canvas.clientWidth, h=canvas.clientHeight;
+  ctx.fillStyle="#050605"; ctx.fillRect(0,0,w,h);
+  const pads=[[0.22,0.28],[0.50,0.22],[0.78,0.30],[0.30,0.58],[0.55,0.52],[0.76,0.62],[0.48,0.78]];
+  pads.forEach(([px,py],i)=>hex(px*w, py*h, Math.min(w,h)*0.12, i%2?"#10140a":"#0b1006"));
+  ctx.fillStyle="#1a220c";
+  [[0.18,0.22],[0.82,0.26],[0.20,0.70],[0.84,0.72]].forEach(([px,py])=>{ ctx.fillRect(px*w-8,py*h-40,16,48); ctx.fillRect(px*w-22,py*h-48,44,10); });
+  ctx.fillStyle="#2a3a14"; ctx.beginPath(); ctx.arc(0.70*w,0.40*h,28,0,Math.PI*2); ctx.fill(); ctx.strokeStyle="#ccff00"; ctx.stroke();
+  STATIONS.forEach(s=>{ ctx.fillStyle="#ccff00"; ctx.fillRect(s.x*w-6,s.y*h-6,12,12); ctx.font="11px ui-monospace"; ctx.textAlign="center"; ctx.fillText(s.label, s.x*w, s.y*h-14); });
+  const fx=state.x*w, fy=state.y*h;
+  ctx.fillStyle="#fff"; ctx.fillRect(fx-8,fy-14,16,18);
+  ctx.fillStyle="#000"; ctx.fillRect(fx-6,fy-12,12,14);
+  ctx.strokeStyle="#fff"; ctx.beginPath(); ctx.arc(fx,fy-16,5,0,Math.PI*2); ctx.stroke();
+  for(let y=0;y<h;y+=4){ ctx.fillStyle="rgba(0,0,0,.16)"; ctx.fillRect(0,y,w,1); }
+}
+function tick(){
+  const dx=state.tx-state.x, dy=state.ty-state.y, d=Math.hypot(dx,dy);
+  if(d>0.008){ state.x+=dx*0.12; state.y+=dy*0.12; state.walking=true; }
+  else if(state.walking){
+    state.walking=false; state.x=state.tx; state.y=state.ty;
+    const hit=STATIONS.find(s=>Math.hypot(state.x-s.x,state.y-s.y)<0.09);
+    if(hit && !state.menu){ hit.id==="buy"?openBuy():openTune(); }
+  }
+  draw(); requestAnimationFrame(tick);
+}
+function toWorld(ev){ const r=canvas.getBoundingClientRect(); const t=ev.touches?ev.touches[0]:ev; return { x:(t.clientX-r.left)/r.width, y:(t.clientY-r.top)/r.height }; }
+function go(ev){ if(state.menu) return; const p=toWorld(ev); state.tx=Math.min(.9,Math.max(.1,p.x)); state.ty=Math.min(.88,Math.max(.16,p.y)); }
+canvas.addEventListener("pointerdown", go);
+window.addEventListener("resize", resize);
+refreshHud(); resize(); tick();
+</script>
+</body>
+</html>
